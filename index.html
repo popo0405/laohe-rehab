@@ -18210,7 +18210,8 @@ function annotateAndFix(textarea) {
 }
 
 function todayStr() {
-  return new Date().toISOString().slice(0, 10);
+  var d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 }
 
 function getDayOfWeek(dateStr) {
@@ -18232,7 +18233,8 @@ function getWeekDates(offset) {
   for (let i = 0; i < 7; i++) {
     const d = new Date(monday);
     d.setDate(monday.getDate() + i);
-    dates.push(d.toISOString().slice(0, 10));
+    // 使用本地日期，避免 toISOString 的 UTC 偏移问题
+    dates.push(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'));
   }
   return dates;
 }
@@ -18398,7 +18400,7 @@ function renderTodaySchedule(allAppts) {
 function buildTomorrowReminder(allAppts) {
   var today = new Date();
   var tomorrow = new Date(today.getTime() + 86400000);
-  var tomStr = tomorrow.toISOString().slice(0, 10);
+  var tomStr = tomorrow.getFullYear() + '-' + String(tomorrow.getMonth() + 1).padStart(2, '0') + '-' + String(tomorrow.getDate()).padStart(2, '0');
   // 转成可读日期 (今日 YYYY-MM-DD 周X)
   var weekDay = ['日','一','二','三','四','五','六'][tomorrow.getDay()];
 
@@ -19134,7 +19136,7 @@ function getTimeSlotsForDate(dateStr) {
 }
 
 // 兼容旧引用（避免破坏 generatePlan 等）
-const TIME_SLOTS = getTimeSlotsForDate(new Date().toISOString().slice(0,10));
+const TIME_SLOTS = getTimeSlotsForDate((function(){var d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');})());
 
 function refreshApptTimeSlots() {
   var sel = document.getElementById('appt_time');
@@ -20165,8 +20167,8 @@ function renderDashboard() {
   // --- 本周日期范围 ---
   var dayOfWeek = now.getDay() || 7; // 周日=7
   var monday = new Date(now.getTime() - (dayOfWeek - 1) * 86400000);
-  var mondayStr = monday.toISOString().slice(0, 10);
-  var todayStr = now.toISOString().slice(0, 10);
+  var mondayStr = monday.getFullYear() + '-' + String(monday.getMonth() + 1).padStart(2, '0') + '-' + String(monday.getDate()).padStart(2, '0');
+  var todayStr = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
 
   // --- 本周课时统计 ---
   var weekAppts = [];
