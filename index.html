@@ -17413,7 +17413,8 @@ async function fetchSyncData() {
     if (!r.ok) throw new Error('HTTP ' + r.status);
     var resp = await r.json();
     // GitHub API 返回 base64 编码的内容
-    var content = atob(resp.content.replace(/\n/g, ''));
+    // 注意：btoa 编码中文字符需要 encodeURIComponent + unescape，解码时对应
+    var content = decodeURIComponent(escape(atob(resp.content.replace(/\n/g, ''))));
     var data = JSON.parse(content);
     data._sha = resp.sha; // 记住文件 sha，更新时需要
     return data;
