@@ -1,6 +1,6 @@
 // Service Worker for 老何康复工作台
 // 关键：使用固定 cache 版本号 + 启动时清理所有旧 cache
-const CACHE_VERSION = 'v7';  // v7: 修复手法技术数据(72条)+扩展训练库(643)+运动损伤康复(91条)+优化生成器界面
+const CACHE_VERSION = 'v8';  // v8: GitHub仓库同步模式（替代Cloudflare KV）
 const CACHE = 'rehab-' + CACHE_VERSION;
 const PRECACHE = [
   '/',

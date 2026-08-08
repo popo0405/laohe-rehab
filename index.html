@@ -17293,13 +17293,19 @@ function migrateOldData() {
 
 // ===== 数据存储：localStorage（离线缓存）+ 可选后端 API（多设备共享）=====
 // 默认：纯本地（不连云端，分享给他人各自独立）
-// 加 URL 参数 ?shared=1 开启云端共享（依赖 /api/data，需内网穿透或后端）
+// ===== GitHub 仓库同步（用仓库当数据库）=====
+// 加 URL 参数 ?shared=1 开启云端同步
 const SHARED_MODE = /[?&]shared=1\b/.test(location.search);
-const SYNC_API = '/api/data';
+// GitHub 配置：仓库信息和 Token 存在 localStorage 里，首次使用时引导用户填入
+const GITHUB_OWNER = 'POPO0405';
+const GITHUB_REPO = 'laohe-rehab';
+const GITHUB_DATA_PATH = 'data.json';
+let GITHUB_TOKEN = localStorage.getItem('github_sync_token') || '';
 let syncTimer = null;
 let syncing = false;
 let lastSyncedAt = null;
 let syncError = null;
+let gitSyncEnabled = !!GITHUB_TOKEN;
 
 // 共享模式横幅显示控制
 function updateSharedBanner() {
@@ -17343,7 +17349,27 @@ function loadData() {
     return;
   }
 
-  // 共享模式：异步从服务器拉最新数据（后端是权威）
+  // 共享模式：检查 Token 是否已配置
+  if (!GITHUB_TOKEN) {
+    // 首次使用：弹出引导
+    setTimeout(function() {
+      var token = prompt('🔗 开启云端同步\n\n请粘贴你的 GitHub Personal Access Token（需要 repo 权限）：\n\n获取方式：https://github.com/settings/tokens\n点 Generate new token (classic) → 勾选 repo → 生成');
+      if (token && token.trim()) {
+        GITHUB_TOKEN = token.trim();
+        localStorage.setItem('github_sync_token', GITHUB_TOKEN);
+        gitSyncEnabled = true;
+        // 立即尝试同步
+        loadData();
+      } else {
+        alert('未配置 Token，云端同步不可用，当前为本地模式。\n如需开启同步，请重新访问并在弹窗中粘贴 Token。');
+      }
+    }, 500);
+    updateSharedBanner();
+    updateSyncStatus();
+    return;
+  }
+
+  // 共享模式：异步从 GitHub 拉最新数据
   fetchSyncData().then(function(serverData) {
     if (!serverData || !serverData.updatedAt) return;
     // 无条件以服务器为权威（之前的"服务器比本地新才覆盖"逻辑会让手机卡在旧的 lastSyncedAt）
@@ -17370,30 +17396,47 @@ function loadData() {
   }).catch(function(e) { syncError = e.message; });
 }
 
+// 从 GitHub 仓库拉取 data.json
 async function fetchSyncData() {
   try {
-    var r = await fetch(SYNC_API, { cache: 'no-store' });
+    var url = 'https://api.github.com/repos/' + GITHUB_OWNER + '/' + GITHUB_REPO + '/contents/' + GITHUB_DATA_PATH + '?ref=main&t=' + Date.now();
+    var r = await fetch(url, {
+      headers: {
+        'Authorization': 'token ' + GITHUB_TOKEN,
+        'Accept': 'application/vnd.github.v3+json'
+      }
+    });
+    if (r.status === 404) {
+      // 仓库里还没有 data.json，首次使用
+      return null;
+    }
     if (!r.ok) throw new Error('HTTP ' + r.status);
-    return await r.json();
+    var resp = await r.json();
+    // GitHub API 返回 base64 编码的内容
+    var content = atob(resp.content.replace(/\n/g, ''));
+    var data = JSON.parse(content);
+    data._sha = resp.sha; // 记住文件 sha，更新时需要
+    return data;
   } catch (e) {
     syncError = e.message;
     return null;
   }
 }
 
-// 保存到本地 + 防抖同步到服务器
+// 保存到本地 + 防抖同步到 GitHub
 function persistLocal() {
   try { localStorage.setItem('rehab_clients', JSON.stringify(clients)); } catch(e) {}
   try { localStorage.setItem('rehab_cases', JSON.stringify(cases)); } catch(e) {}
   try { localStorage.setItem('rehab_learning_state', JSON.stringify(learningState)); } catch(e) {}
-  if (SHARED_MODE) scheduleSync();
+  if (SHARED_MODE && gitSyncEnabled) scheduleSync();
 }
 
 function scheduleSync() {
   if (syncTimer) clearTimeout(syncTimer);
-  syncTimer = setTimeout(syncToServer, 800);
+  syncTimer = setTimeout(syncToServer, 1500); // GitHub API 有频率限制，防抖时间长一点
 }
 
+// 上传数据到 GitHub 仓库的 data.json
 async function syncToServer() {
   if (syncing) {
     scheduleSync();
@@ -17405,16 +17448,47 @@ async function syncToServer() {
       rehab_clients: clients,
       rehab_cases: cases,
       rehab_learning_state: learningState,
-      updatedBy: navigator.userAgent.indexOf('Mobile') >= 0 ? 'mobile' : 'desktop'
+      updatedBy: navigator.userAgent.indexOf('Mobile') >= 0 ? 'mobile' : 'desktop',
+      updatedAt: new Date().toISOString()
     };
-    var r = await fetch(SYNC_API + '?backup=1', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(payload)
+    var content = btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
+
+    // 先获取当前文件的 sha（如果存在）
+    var getUrl = 'https://api.github.com/repos/' + GITHUB_OWNER + '/' + GITHUB_REPO + '/contents/' + GITHUB_DATA_PATH;
+    var sha = null;
+    try {
+      var getResp = await fetch(getUrl, {
+        headers: { 'Authorization': 'token ' + GITHUB_TOKEN, 'Accept': 'application/vnd.github.v3+json' }
+      });
+      if (getResp.ok) {
+        var getFile = await getResp.json();
+        sha = getFile.sha;
+      }
+    } catch(e) {}
+
+    // PUT 更新或创建文件
+    var body = {
+      message: 'sync: update data.json at ' + new Date().toISOString(),
+      content: content,
+      branch: 'main'
+    };
+    if (sha) body.sha = sha;
+
+    var putResp = await fetch(getUrl, {
+      method: 'PUT',
+      headers: {
+        'Authorization': 'token ' + GITHUB_TOKEN,
+        'Accept': 'application/vnd.github.v3+json',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(body)
     });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    var resp = await r.json();
-    lastSyncedAt = resp.updatedAt;
+    if (!putResp.ok) {
+      var errBody = await putResp.text();
+      throw new Error('HTTP ' + putResp.status + ': ' + errBody.substring(0, 100));
+    }
+    var result = await putResp.json();
+    lastSyncedAt = payload.updatedAt;
     try { localStorage.setItem('rehab_last_sync', lastSyncedAt); } catch(e) {}
     syncError = null;
     updateSyncStatus();
@@ -17431,16 +17505,21 @@ function updateSyncStatus() {
   if (!el) return;
   if (!SHARED_MODE) {
     el.innerHTML = '<span style="color:#6366f1">🔒 本地模式</span> <span style="color:#9ca3af;font-size:11px">（不连云端）</span>';
-    el.title = '当前为本地模式：数据仅存在本机浏览器。\n如需多设备共享，请在 URL 末尾加 ?shared=1\n（依赖内网穿透或后端 KV）';
+    el.title = '当前为本地模式：数据仅存在本机浏览器。\n如需多设备共享，请在 URL 末尾加 ?shared=1\n（需配置 GitHub Token）';
+    return;
+  }
+  if (!gitSyncEnabled) {
+    el.innerHTML = '<span style="color:#f59e0b">⚠️ 未配置 Token</span> <span style="color:#9ca3af;font-size:11px">点击刷新重试</span>';
+    el.title = '未配置 GitHub Token，云端同步不可用';
     return;
   }
   if (syncError) {
-    el.innerHTML = '<span style="color:#f59e0b">⚠️ 离线 · 数据仅本地</span>';
-    el.title = '同步失败：' + syncError + '\n数据已存本地，恢复网络后会自动同步';
+    el.innerHTML = '<span style="color:#f59e0b">⚠️ 同步失败 · 数据仅本地</span>';
+    el.title = '同步失败：' + syncError + '\n数据已存本地，恢复后会自动重试';
   } else if (lastSyncedAt) {
     var t = new Date(lastSyncedAt);
     el.innerHTML = '<span style="color:#10b981">● 已同步</span> <span style="color:#9ca3af;font-size:11px">' + t.toLocaleTimeString() + '</span>';
-    el.title = '最后同步：' + t.toLocaleString();
+    el.title = '最后同步：' + t.toLocaleString() + '\n数据已同步到 GitHub 仓库';
   } else {
     el.innerHTML = '<span style="color:#9ca3af">○ 待同步</span>';
   }
